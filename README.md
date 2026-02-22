@@ -1,8 +1,16 @@
-# IsaacLabTutorial - JetBot Navigation RL Environment
+# JetBot Sphere-Following RL on Isaac Lab & Isaac Sim
 
-A reinforcement learning environment built on **NVIDIA Isaac Sim** and **Isaac Lab** where a JetBot robot learns to navigate towards randomly-commanded directions using PPO/AMP algorithms.
+A complete reinforcement learning pipeline where a **NVIDIA JetBot** learns to chase a green sphere using **PPO** - trained in **Isaac Lab**, deployed in **Isaac Sim standalone** and as an **Isaac Sim extension**.
 
-Based on the official [Isaac Lab Tutorial](https://isaac-sim.github.io/IsaacLab).
+Built on **NVIDIA Isaac Sim** and **Isaac Lab**, trained on a **Dell Pro Max** with **NVIDIA RTX PRO 6000 Blackwell** (96 GB).
+
+## Overview
+
+| Component | Description |
+|-----------|-------------|
+| **Isaac Lab Environment** | GPU-accelerated parallel RL training (100 envs, ~10 min) |
+| **Isaac Sim Standalone** | Single-script policy playback using Isaac Sim APIs |
+| **Isaac Sim Extension** | Full UI extension in the Examples Browser (Load/Reset/Live Status) |
 
 ## Prerequisites
 
@@ -11,57 +19,52 @@ Based on the official [Isaac Lab Tutorial](https://isaac-sim.github.io/IsaacLab)
 - **NVIDIA GPU** with CUDA support
 - **Python 3.10+**
 
-## Quick Start
+---
 
-### 1. Install the package
+## Chapter I: Isaac Lab - Training
+
+### Quick Start
 
 ```bash
+# 1. Install the package
 ./launch.sh install
-# or
-make install
-```
 
-### 2. Verify the environment is registered
-
-```bash
+# 2. Verify environments are registered
 ./launch.sh list-envs
-```
+# Output:
+#   Template-Isaac-Lab-Tutorial-Direct-v0
+#   Isaac-Lab-Tutorial-SphereFollow-Direct-v0
 
-### 3. Test with a random agent
+# 3. Visual smoke test
+./launch.sh random-agent --num_envs 10
 
-```bash
-./launch.sh random-agent
-# or with custom options
-./launch.sh random-agent --num_envs 64 --device cuda:0
-```
-
-### 4. Train an RL agent
-
-```bash
-# Train with PPO (default)
+# 4. Train PPO agent (100 parallel envs, ~10 min)
 ./launch.sh train --algorithm PPO --num_envs 100
 
-# Train with AMP
-./launch.sh train --algorithm AMP --num_envs 50
-
-# Resume from checkpoint
-./launch.sh train --algorithm PPO --checkpoint logs/skrl/.../checkpoints/best_agent.pt
+# 5. Evaluate the trained agent
+./launch.sh play --checkpoint logs/skrl/sphere_follow_direct/<run>/checkpoints/best_agent.pt
 ```
 
-### 5. Evaluate a trained agent
+### Environments
 
-```bash
-# Auto-detect latest checkpoint
-./launch.sh play --algorithm PPO
+| Environment | Obs | Action | Task |
+|------------|-----|--------|------|
+| `Template-Isaac-Lab-Tutorial-Direct-v0` | 3D | 2D | Follow random direction command |
+| `Isaac-Lab-Tutorial-SphereFollow-Direct-v0` | 4D | 2D | Chase a green sphere target |
 
-# Specify checkpoint
-./launch.sh play --checkpoint path/to/checkpoint.pt
+### Sphere-Following Environment
 
-# Real-time evaluation
-./launch.sh play --algorithm PPO --real-time
-```
+| Property | Value |
+|----------|-------|
+| **Observation Space** | 4D: dot product, cross_z, normalized distance, forward speed |
+| **Action Space** | 2D: left/right wheel velocity targets |
+| **Reward** | approach + alignment + reach_bonus(5.0) + time_penalty(-0.01) |
+| **Episode Length** | 20 seconds |
+| **Physics Rate** | 120 Hz (decimation=2, control at 60 Hz) |
+| **Parallel Envs** | 100 (default) |
+| **Sphere Reach** | 0.3m threshold, respawns 0.5-1.5m away |
 
-## Launch Commands Reference
+### Launch Commands
 
 | Command | Description |
 |---------|-------------|
@@ -74,78 +77,162 @@ make install
 | `./launch.sh check` | Verify prerequisites |
 | `./launch.sh help` | Show full usage details |
 
-You can also use `make`:
+Make shortcuts:
 
 ```bash
-make help                           # Show all targets
 make train ALGORITHM=PPO NUM_ENVS=100
-make play CHECKPOINT=path/to/model.pt
-make train-ppo                      # Shortcut for PPO training
-make train-amp                      # Shortcut for AMP training
+make play CHECKPOINT=logs/skrl/sphere_follow_direct/<run>/checkpoints/best_agent.pt
+make train-ppo           # Shortcut for PPO training
 ```
 
-## Environment Details
+### Training Configuration (PPO)
 
-| Property | Value |
-|----------|-------|
-| **Environment ID** | `Template-Isaac-Lab-Tutorial-Direct-v0` |
-| **Robot** | NVIDIA JetBot (2-wheel differential drive) |
-| **Action Space** | 2D (left/right wheel velocities) |
-| **Observation Space** | 3D (alignment dot product, cross product, forward speed) |
-| **Reward** | forward_speed + alignment_with_command |
-| **Episode Length** | 5 seconds |
-| **Simulation Rate** | 120 Hz |
-| **Default Parallel Envs** | 100 |
+| Parameter | Value |
+|-----------|-------|
+| Network | [64, 64] shared backbone + ELU |
+| Rollout length | 48 steps |
+| Learning rate | 3e-4 (KL adaptive) |
+| Mini-batches | 8 |
+| Learning epochs | 8 |
+| Entropy coeff | 0.01 |
+| Total timesteps | 24,000 |
+| Discount factor | 0.99 |
+
+---
+
+## Chapter II: Isaac Sim Standalone
+
+Deploy the trained checkpoint in a standalone Isaac Sim script - no Isaac Lab required.
+
+### Usage
+
+```bash
+python scripts/standalone_sphere_follow.py \
+    --checkpoint logs/skrl/sphere_follow_direct/<run>/checkpoints/best_agent.pt
+```
+
+### API Mapping (Isaac Lab -> Isaac Sim)
+
+| Isaac Lab | Isaac Sim Standalone |
+|-----------|---------------------|
+| `robot.data.root_pos_w` | `jetbot.get_world_pose()[0]` |
+| `robot.data.root_link_quat_w` | `jetbot.get_world_pose()[1]` (wxyz) |
+| `robot.data.root_com_lin_vel_b[:,0]` | `quat_rotate_inverse(q, get_linear_velocity())[0]` |
+| `math_utils.quat_apply(q, v)` | `quat_rotate(q, v)` |
+| `robot.set_joint_velocity_target(a)` | `articulation_view.set_joint_velocity_targets(a)` |
+
+### What the Script Does
+
+- Loads the PolicyNetwork (4->64->64->2) and observation normalizer from the checkpoint
+- Creates a World with matching physics/render rates (120Hz/60Hz)
+- Spawns JetBot, ground plane, dome light, and green sphere
+- Runs policy inference in a loop: read state -> compute obs -> normalize -> forward pass -> apply action
+- Repositions the sphere when the JetBot reaches it (continuous tracking)
+
+---
+
+## Chapter III: Isaac Sim Extension
+
+A full Isaac Sim extension registered in the **Examples Browser** under **Policy > JetBot Sphere Follow**.
+
+### Installation
+
+The extension files are installed into the Isaac Sim interactive examples:
+
+```
+isaacsim/exts/isaacsim.examples.interactive/
+  isaacsim/examples/interactive/sphere_follow/
+    __init__.py
+    sphere_follow.py                # SphereFollow(BaseSample)
+    sphere_follow_extension.py      # UI + Extension registration
+```
+
+Add to `extension.toml`:
+
+```toml
+[[python.module]]
+name = "isaacsim.examples.interactive.sphere_follow"
+```
+
+### Architecture
+
+| Class | Role |
+|-------|------|
+| `SphereFollow(BaseSample)` | Scene setup, policy loading, physics callback for inference |
+| `SphereFollowUI(BaseSampleUITemplate)` | Checkpoint path field + live status display |
+| `SphereFollowExtension(omni.ext.IExt)` | Registers in Examples Browser under "Policy" |
+
+### UI Features
+
+- **World Controls**: Standard Load / Reset buttons
+- **Policy Configuration**: Editable checkpoint path (set before Load)
+- **Live Status**: Spheres reached, step count, 4D observations, wheel actions (updated every ~0.5s)
+
+### How It Works
+
+1. Click **Load** in the Examples Browser
+2. Extension loads checkpoint, spawns JetBot + sphere, registers physics callback
+3. Policy runs at 60Hz (decimation=2 from 120Hz physics)
+4. JetBot tracks sphere; sphere repositions on reach
+5. Click **Reset** to restart the scene
+
+---
 
 ## Project Structure
 
 ```
 IsaacLabTutorial/
-├── launch.sh                      # Main launch script
-├── Makefile                       # Make-based shortcuts
+├── launch.sh                          # Main launch script
+├── Makefile                           # Make-based shortcuts
+├── blog_generate_pdf.py               # PDF documentation generator
+├── JetBot_Sphere_Following_RL_Blog.pdf # Generated documentation
 ├── scripts/
-│   ├── list_envs.py               # List registered environments
-│   ├── random_agent.py            # Random action baseline
-│   ├── zero_agent.py              # Zero action baseline
+│   ├── standalone_sphere_follow.py    # Isaac Sim standalone deployment
+│   ├── list_envs.py                   # List registered environments
+│   ├── random_agent.py                # Random action baseline
+│   ├── zero_agent.py                  # Zero action baseline
 │   └── skrl/
-│       ├── train.py               # RL training (PPO/AMP)
-│       └── play.py                # Checkpoint evaluation
+│       ├── train.py                   # RL training (PPO/AMP)
+│       └── play.py                    # Checkpoint evaluation
+├── exts/
+│   └── isaacsim.examples.interactive.sphere_follow/
+│       └── sphere_follow/             # Isaac Sim extension (repo copy)
+│           ├── __init__.py
+│           ├── sphere_follow.py
+│           └── sphere_follow_extension.py
 └── source/
     └── isaac_lab_tutorial/
-        ├── setup.py               # Package configuration
+        ├── setup.py
         └── isaac_lab_tutorial/
+            ├── __init__.py
+            ├── ui_extension_example.py
+            ├── sphere_follow_extension.py  # Local Isaac Sim extension
             ├── robots/
-            │   └── jetbot.py      # JetBot robot config
+            │   └── jetbot.py              # JetBot ArticulationCfg
             └── tasks/
                 └── direct/
                     └── isaac_lab_tutorial/
-                        ├── isaac_lab_tutorial_env.py      # Environment implementation
-                        ├── isaac_lab_tutorial_env_cfg.py   # Environment config
+                        ├── __init__.py                    # Gym registration
+                        ├── isaac_lab_tutorial_env.py      # IsaacLabTutorialEnv + SphereFollowEnv
+                        ├── isaac_lab_tutorial_env_cfg.py  # Environment configs
                         └── agents/
-                            ├── skrl_ppo_cfg.yaml          # PPO hyperparameters
-                            └── skrl_amp_cfg.yaml          # AMP hyperparameters
+                            ├── skrl_ppo_cfg.yaml
+                            ├── skrl_amp_cfg.yaml
+                            └── skrl_sphere_follow_ppo_cfg.yaml
 ```
 
 ## Training Logs
 
-Training logs, checkpoints, and videos are saved to `logs/skrl/`. Structure:
-
 ```
-logs/skrl/<experiment>/
-├── <timestamp>_ppo_torch/
-│   ├── params/              # Saved configs (env.yaml, agent.yaml)
-│   ├── checkpoints/         # Model checkpoints
-│   └── videos/              # Recorded videos (if --video flag used)
+logs/skrl/sphere_follow_direct/
+└── <timestamp>_ppo_torch/
+    ├── checkpoints/
+    │   ├── best_agent.pt      # Best by episode return
+    │   └── agent_24000.pt     # Final checkpoint
+    └── params/
+        ├── env.yaml           # Environment config snapshot
+        └── agent.yaml         # Agent hyperparameters
 ```
-
-## Supported Algorithms
-
-| Algorithm | Description | Config |
-|-----------|-------------|--------|
-| **PPO** | Proximal Policy Optimization | `skrl_ppo_cfg.yaml` |
-| **AMP** | Adversarial Motion Priors | `skrl_amp_cfg.yaml` |
-| **IPPO** | Independent PPO (multi-agent) | via skrl |
-| **MAPPO** | Multi-Agent PPO | via skrl |
 
 ## License
 
