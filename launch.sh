@@ -14,7 +14,7 @@ set -euo pipefail
 
 # ---- Configuration -----------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TASK_NAME="Template-Isaac-Lab-Tutorial-Direct-v0"
+TASK_NAME="Isaac-Lab-Tutorial-SphereFollow-Direct-v0"
 DEFAULT_NUM_ENVS=100
 DEFAULT_ALGORITHM="PPO"
 DEFAULT_DEVICE="cuda:0"

@@ -93,7 +93,17 @@ from isaaclab.envs import (
 )
 from isaaclab.utils.assets import retrieve_file_path
 from isaaclab.utils.dict import print_dict
-from isaaclab.utils.io import dump_pickle, dump_yaml
+from isaaclab.utils.io import dump_yaml
+try:
+    from isaaclab.utils.io import dump_pickle
+except ImportError:
+    import pickle
+
+    def dump_pickle(filename: str, data: object) -> None:
+        """Dump data to a pickle file."""
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        with open(filename, "wb") as f:
+            pickle.dump(data, f)
 
 from isaaclab_rl.skrl import SkrlVecEnvWrapper
 

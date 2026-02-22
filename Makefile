@@ -3,7 +3,7 @@
 # ==============================================================================
 
 SHELL := /bin/bash
-TASK := Template-Isaac-Lab-Tutorial-Direct-v0
+TASK := Isaac-Lab-Tutorial-SphereFollow-Direct-v0
 NUM_ENVS ?= 100
 ALGORITHM ?= PPO
 DEVICE ?= cuda:0
